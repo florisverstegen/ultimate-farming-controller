@@ -5,6 +5,13 @@
 //
 // Knoppen schakelen naar GND en hebben een pull-up naar 3,3 V:
 //   losgelaten = 1, ingedrukt = 0 (in de code omgedraaid naar "pressed").
+//
+// Debughulp:
+//   - De onboard led knippert 1x per seconde zolang het programma draait.
+//   - Zodra een seriele monitor verbinding maakt, wordt de kop en de huidige
+//     stand geprint (ook na een reset of als de monitor later opent).
+//   - Commando's in de seriele monitor: h = help, s = status, r = herstart,
+//     b = herstart naar uploadmodus (BOOTSEL).
 
 #include <Arduino.h>
 
@@ -16,14 +23,17 @@ constexpr uint8_t PIN_DATA  = 4;  // 74HC165 pin 9 (QH) van chip 1 (dichtst bij 
 constexpr uint8_t NUM_CHIPS  = 2;
 constexpr uint8_t NUM_INPUTS = NUM_CHIPS * 8;
 
-constexpr uint32_t CLOCK_DELAY_US = 2;   // ~250 kHz; verhogen bij lange kabels
-constexpr uint32_t SCAN_INTERVAL_MS = 1; // 1000 scans per seconde
+constexpr uint32_t CLOCK_DELAY_US = 2;    // ~250 kHz; verhogen bij lange kabels
+constexpr uint32_t SCAN_INTERVAL_MS = 1;  // 1000 scans per seconde
 constexpr uint32_t DEBOUNCE_MS = 5;
+constexpr uint32_t LED_BLINK_MS = 500;    // led 500 ms aan, 500 ms uit
 
 // --- State ---------------------------------------------------------------
 static bool stablePressed[NUM_INPUTS];
 static bool lastRaw[NUM_INPUTS];
 static uint32_t lastChangeMs[NUM_INPUTS];
+static uint32_t scanCount = 0;
+static bool monitorConnected = false;
 
 // Leest alle bits van de keten in. Index 0 = eerste bit dat binnenkomt
 // (input H van chip 1), zie printLegend() voor de volledige mapping.
@@ -43,6 +53,10 @@ static void readChain(bool raw[NUM_INPUTS]) {
   }
 }
 
+static void printHelp() {
+  Serial.println(F("Commando's: h = help, s = status, r = herstart, b = herstart naar uploadmodus"));
+}
+
 static void printLegend() {
   Serial.println();
   Serial.println(F("=== Ultimate Farming Controller - schuifregister-test ==="));
@@ -52,6 +66,7 @@ static void printLegend() {
   Serial.println(NUM_INPUTS);
   Serial.println(F("Bitvolgorde: bit 0..7 = chip 1 ingang H..A, bit 8..15 = chip 2 ingang H..A"));
   Serial.println(F("Weergave: links bit 0, '1' = ingedrukt"));
+  printHelp();
   Serial.println();
 }
 
@@ -76,37 +91,85 @@ static void printState() {
   Serial.println();
 }
 
+static void printStatus() {
+  Serial.print(F("Status: uptime "));
+  Serial.print(millis() / 1000);
+  Serial.print(F(" s, scans "));
+  Serial.print(scanCount);
+  Serial.print(F(", CPU "));
+  Serial.print(rp2040.f_cpu() / 1000000);
+  Serial.println(F(" MHz"));
+  printState();
+}
+
+// Print de kop en de stand zodra de seriele monitor (opnieuw) verbinding maakt.
+static void handleMonitorConnection() {
+  bool connected = (bool)Serial;  // true zodra de monitor de poort open heeft
+  if (connected && !monitorConnected) {
+    delay(50);  // monitor even de tijd geven om klaar te staan
+    printLegend();
+    printState();
+  }
+  monitorConnected = connected;
+}
+
+static void handleCommands() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    switch (c) {
+      case 'h': case 'H': printHelp(); break;
+      case 's': case 'S': printStatus(); break;
+      case 'r': case 'R':
+        Serial.println(F("Herstarten..."));
+        Serial.flush();
+        delay(100);
+        rp2040.reboot();
+        break;
+      case 'b': case 'B':
+        Serial.println(F("Herstarten naar uploadmodus (BOOTSEL)..."));
+        Serial.flush();
+        delay(100);
+        rp2040.rebootToBootloader();
+        break;
+      default: break;  // negeer enters en onbekende tekens
+    }
+  }
+}
+
+static void blinkLed(uint32_t now) {
+  digitalWrite(LED_BUILTIN, (now / LED_BLINK_MS) % 2 ? HIGH : LOW);
+}
+
 void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_LOAD, OUTPUT);
   pinMode(PIN_CLOCK, OUTPUT);
   pinMode(PIN_DATA, INPUT);
   digitalWrite(PIN_LOAD, HIGH);
   digitalWrite(PIN_CLOCK, LOW);
 
-  Serial.begin(115200);
-  uint32_t start = millis();
-  while (!Serial && millis() - start < 3000) {
-    // wacht max 3 s op de seriele monitor
-  }
+  Serial.begin(115200);  // niet wachten: de kop komt zodra de monitor verbindt
 
   readChain(lastRaw);
   for (uint8_t i = 0; i < NUM_INPUTS; i++) {
     stablePressed[i] = lastRaw[i];
     lastChangeMs[i] = millis();
   }
-
-  printLegend();
-  printState();
 }
 
 void loop() {
-  static uint32_t lastScan = 0;
   uint32_t now = millis();
+  blinkLed(now);
+  handleMonitorConnection();
+  handleCommands();
+
+  static uint32_t lastScan = 0;
   if (now - lastScan < SCAN_INTERVAL_MS) return;
   lastScan = now;
 
   bool raw[NUM_INPUTS];
   readChain(raw);
+  scanCount++;
 
   bool changed = false;
   for (uint8_t i = 0; i < NUM_INPUTS; i++) {
@@ -120,5 +183,5 @@ void loop() {
     }
   }
 
-  if (changed) printState();
+  if (changed && monitorConnected) printState();
 }
