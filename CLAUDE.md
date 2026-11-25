@@ -49,6 +49,15 @@ pio run -t upload && pio device monitor   # alles in een keer
 
 Eerste upload: BOOTSEL ingedrukt houden tijdens het aansluiten van de Pico.
 
+Ontwikkel-pc: Windows (de werklaptop blokkeert USB-opslag). Seriele poort is meestal COM3.
+
+## Debughulp in de firmware
+
+- Onboard led knippert 1x per seconde zolang het programma draait.
+- Kop + huidige stand worden geprint zodra de seriele monitor verbindt (ook na reset).
+- Commando's in de monitor: `h` help, `s` status, `r` herstart, `b` herstart naar uploadmodus.
+- Resetknop (optioneel) tussen Pico pin 30 (RUN) en GND.
+
 ## Werkwijze / afspraken
 
 - Stapsgewijs bouwen, elke stap eerst valideren via de seriele monitor.
